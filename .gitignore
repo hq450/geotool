@@ -1,0 +1,7 @@
+/.zig-cache
+/zig-cache
+/zig-out
+/dist
+/dist-test
+/tools_upx_*.tar.xz
+/upx-*-amd64_linux
