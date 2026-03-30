@@ -86,8 +86,8 @@ bash ./scripts/build-release.sh --upx
 脚本默认使用：
 
 - `/tmp/zig` 或系统中可找到的最新 Zig
-- `./upx-4.2.4-amd64_linux/upx`
-- `./upx-5.0.2-amd64_linux/upx`
+- `--upx` 模式下必须从环境变量读取 UPX 路径
+- 必须设置 `UPX_4_2_4` 和 `UPX_5_0_2`
 
 也可以通过环境变量覆盖：
 
@@ -96,13 +96,6 @@ ZIG=/path/to/zig \
 UPX_4_2_4=/path/to/upx-4.2.4 \
 UPX_5_0_2=/path/to/upx-5.0.2 \
 bash ./scripts/build-release.sh --upx
-```
-
-兼容旧变量名：
-
-```bash
-UPX_424=/path/to/upx-4.2.4
-UPX_502=/path/to/upx-5.0.2
 ```
 
 只构建指定目标：
