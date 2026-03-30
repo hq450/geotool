@@ -65,17 +65,6 @@ require_upx_version() {
     fi
 }
 
-first_non_empty() {
-    local value
-    for value in "$@"; do
-        if [[ -n "$value" ]]; then
-            printf '%s\n' "$value"
-            return 0
-        fi
-    done
-    return 1
-}
-
 build_target() {
     local name="$1"
     local zig_target="$2"
@@ -101,8 +90,8 @@ build_target() {
 
     if [[ "$WITH_UPX" == "1" ]]; then
         case "$name" in
-            armv5te) upx_bin="$UPX_424" ;;
-            *) upx_bin="$UPX_502" ;;
+            armv5te) upx_bin="$UPX_4_2_4" ;;
+            *) upx_bin="$UPX_5_0_2" ;;
         esac
         echo "==> packing $name with $(basename "$(dirname "$upx_bin")")"
         "$upx_bin" --lzma --ultra-brute "$output"
@@ -135,32 +124,22 @@ if [[ ${#TARGETS[@]} -eq 0 ]]; then
 fi
 
 ZIG_BIN="$(find_latest_zig)"
-UPX_424="$(
-    first_non_empty \
-        "${UPX_4_2_4:-}" \
-        "${UPX_424:-}" \
-        "$ROOT_DIR/upx-4.2.4-amd64_linux/upx"
-)"
-UPX_502="$(
-    first_non_empty \
-        "${UPX_5_0_2:-}" \
-        "${UPX_502:-}" \
-        "$ROOT_DIR/upx-5.0.2-amd64_linux/upx"
-)"
 
 require_executable "$ZIG_BIN" "Zig"
 if [[ "$WITH_UPX" == "1" ]]; then
-    require_executable "$UPX_424" "UPX 4.2.4"
-    require_executable "$UPX_502" "UPX 5.0.2"
-    require_upx_version "$UPX_424" "4.2.4"
-    require_upx_version "$UPX_502" "5.0.2"
+    : "${UPX_4_2_4:?error: set UPX_4_2_4 to the path of upx 4.2.4}"
+    : "${UPX_5_0_2:?error: set UPX_5_0_2 to the path of upx 5.0.2}"
+    require_executable "$UPX_4_2_4" "UPX 4.2.4"
+    require_executable "$UPX_5_0_2" "UPX 5.0.2"
+    require_upx_version "$UPX_4_2_4" "4.2.4"
+    require_upx_version "$UPX_5_0_2" "5.0.2"
 fi
 
 echo "Version: $VERSION"
 echo "Using Zig: $ZIG_BIN ($("$ZIG_BIN" version))"
 if [[ "$WITH_UPX" == "1" ]]; then
-    echo "Using UPX 4.2.4: $UPX_424"
-    echo "Using UPX 5.0.2: $UPX_502"
+    echo "Using UPX 4.2.4: $UPX_4_2_4"
+    echo "Using UPX 5.0.2: $UPX_5_0_2"
 else
     echo "UPX: disabled"
 fi
