@@ -32,6 +32,8 @@
 
 ## 构建
 
+当前版本：`1.0`
+
 当前代码已在 Zig `0.15.2` 下验证。
 
 构建 `x86_64` 静态版本：
@@ -46,10 +48,10 @@ zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSmall
 ./zig-out/bin/geotool
 ```
 
-如果要一次性输出压缩后的多平台发布包，可以直接运行：
+如果要一次性输出多平台发布包，可以直接运行：
 
 ```bash
-./scripts/build-release.sh
+bash ./scripts/build-release.sh
 ```
 
 默认会生成以下版本：
@@ -66,6 +68,18 @@ zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSmall
 ./dist
 ```
 
+脚本默认行为：
+
+- 默认不使用 UPX
+- 如需压缩，再显式加 `--upx`
+- 输出文件名带版本号，例如 `geotool-v1.0-linux-armv7a`
+
+启用 UPX：
+
+```bash
+bash ./scripts/build-release.sh --upx
+```
+
 脚本默认使用：
 
 - `/tmp/zig` 或系统中可找到的最新 Zig
@@ -78,7 +92,7 @@ zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSmall
 ZIG=/path/to/zig \
 UPX_4_2_4=/path/to/upx-4.2.4 \
 UPX_5_0_2=/path/to/upx-5.0.2 \
-./scripts/build-release.sh
+bash ./scripts/build-release.sh --upx
 ```
 
 兼容旧变量名：
@@ -91,14 +105,14 @@ UPX_502=/path/to/upx-5.0.2
 只构建指定目标：
 
 ```bash
-./scripts/build-release.sh armv7a aarch64
+bash ./scripts/build-release.sh armv7a aarch64
 ```
 
 说明：
 
 - `armv5te` 使用 `UPX 4.2.4`
 - 其它目标使用 `UPX 5.0.2`
-- 为了兼容你指定的 UPX 压缩流程，发布脚本中的各目标会使用静态 musl + `-lc` 方式构建
+- 为了兼容构建与压缩流程，发布脚本中的各目标会使用静态 musl + `-lc` 方式构建
 - `armv7a` 默认 CPU 为 `mpcorenovfp`，更适合 RT-AC88U 这类 Broadcom BCM4709 / Cortex-A9 路由器
 - `armv7hf` 默认 CPU 为 `cortex_a9`，用于硬浮点 ARMv7 设备的对照测试，不建议替代 RT-AC88U 的默认选择
 
@@ -192,6 +206,7 @@ Usage:
 - `-i, --input`：输入 geosite 文件路径
 - `-c, --category`：一个或多个分类名，使用逗号分隔
 - `-o, --output`：输出到文件，而不是标准输出
+- `-v, --version`：显示版本号
 - `-h, --help`：显示帮助
 
 ## 项目结构
