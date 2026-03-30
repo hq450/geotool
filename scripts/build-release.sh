@@ -44,6 +44,25 @@ find_latest_zig() {
     printf '%s\n' "${candidates[@]}" | awk 'NF' | tail -n 1
 }
 
+find_required_command() {
+    local env_value="$1"
+    local command_name="$2"
+    local label="$3"
+
+    if [[ -n "$env_value" ]]; then
+        printf '%s\n' "$env_value"
+        return 0
+    fi
+
+    if command -v "$command_name" >/dev/null 2>&1; then
+        command -v "$command_name"
+        return 0
+    fi
+
+    echo "error: ${label} not found. Set the environment variable or add ${command_name} to PATH." >&2
+    exit 1
+}
+
 require_executable() {
     local path="$1"
     local name="$2"
@@ -124,11 +143,11 @@ if [[ ${#TARGETS[@]} -eq 0 ]]; then
 fi
 
 ZIG_BIN="$(find_latest_zig)"
+UPX_4_2_4="$(find_required_command "${UPX_4_2_4:-}" "upx-4.2.4" "UPX 4.2.4")"
+UPX_5_0_2="$(find_required_command "${UPX_5_0_2:-}" "upx-5.0.2" "UPX 5.0.2")"
 
 require_executable "$ZIG_BIN" "Zig"
 if [[ "$WITH_UPX" == "1" ]]; then
-    : "${UPX_4_2_4:?error: set UPX_4_2_4 to the path of upx 4.2.4}"
-    : "${UPX_5_0_2:?error: set UPX_5_0_2 to the path of upx 5.0.2}"
     require_executable "$UPX_4_2_4" "UPX 4.2.4"
     require_executable "$UPX_5_0_2" "UPX 5.0.2"
     require_upx_version "$UPX_4_2_4" "4.2.4"
