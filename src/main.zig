@@ -3,10 +3,12 @@ const builtin = @import("builtin");
 const geosite = @import("geosite.zig");
 
 const max_input_size = 256 * 1024 * 1024;
+const app_version = "1.0";
 
 const Command = enum {
     list,
     export_cmd,
+    version,
 };
 
 const Options = struct {
@@ -44,6 +46,12 @@ fn run() !void {
     defer std.process.argsFree(allocator, args);
 
     const options = try parseArgs(args);
+    if (options.command == .version) {
+        try std.fs.File.stdout().writeAll(std.mem.trimRight(u8, app_version, "\r\n"));
+        try std.fs.File.stdout().writeAll("\n");
+        return;
+    }
+
     const data = try std.fs.cwd().readFileAlloc(allocator, options.input, max_input_size);
     defer allocator.free(data);
 
@@ -70,6 +78,7 @@ fn run() !void {
                 try geosite.exportCategories(allocator, std.fs.File.stdout().deprecatedWriter(), data, categories);
             }
         },
+        .version => unreachable,
     }
 }
 
@@ -90,6 +99,12 @@ fn parseArgs(args: []const []const u8) !Options {
 
     if (std.mem.eql(u8, args[1], "-h") or std.mem.eql(u8, args[1], "--help")) {
         return error.HelpRequested;
+    }
+    if (std.mem.eql(u8, args[1], "-v") or std.mem.eql(u8, args[1], "--version")) {
+        return .{
+            .command = .version,
+            .input = "",
+        };
     }
 
     const command = if (std.mem.eql(u8, args[1], "list"))
@@ -181,6 +196,7 @@ fn printUsage(writer: anytype) !void {
         \\  -i, --input       Path to geosite/dlc dat file
         \\  -c, --category    One or more category names, separated by commas
         \\  -o, --output      Write result to file instead of stdout
+        \\  -v, --version     Show version
         \\  -h, --help        Show this help
         \\
     );

@@ -2,9 +2,25 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/dist}"
 LOCAL_CACHE_BASE="${LOCAL_CACHE_BASE:-$ROOT_DIR/.zig-cache/release}"
 GLOBAL_CACHE_DIR="${GLOBAL_CACHE_DIR:-$ROOT_DIR/.zig-cache/release-global}"
+WITH_UPX=0
+
+print_usage() {
+    cat <<'EOF'
+Usage:
+  bash ./scripts/build-release.sh [--upx] [target...]
+
+Targets:
+  x86_64 armv5te armv7a armv7hf aarch64
+
+Options:
+  --upx         Compress artifacts with the configured UPX binaries
+  -h, --help    Show this help
+EOF
+}
 
 find_latest_zig() {
     local candidates=()
@@ -64,9 +80,9 @@ build_target() {
     local name="$1"
     local zig_target="$2"
     local cpu="$3"
-    local upx_bin="$4"
-    local output="$OUT_DIR/geotool-linux-$name"
+    local output="$OUT_DIR/geotool-v${VERSION}-linux-$name"
     local local_cache_dir="$LOCAL_CACHE_BASE/$name"
+    local upx_bin=""
 
     mkdir -p "$OUT_DIR" "$local_cache_dir" "$GLOBAL_CACHE_DIR"
     rm -f "$output"
@@ -83,14 +99,37 @@ build_target() {
         -mcpu="$cpu" \
         -femit-bin="$output"
 
-    echo "==> packing $name with $(basename "$(dirname "$upx_bin")")"
-    "$upx_bin" --lzma --ultra-brute "$output"
+    if [[ "$WITH_UPX" == "1" ]]; then
+        case "$name" in
+            armv5te) upx_bin="$UPX_424" ;;
+            *) upx_bin="$UPX_502" ;;
+        esac
+        echo "==> packing $name with $(basename "$(dirname "$upx_bin")")"
+        "$upx_bin" --lzma --ultra-brute "$output"
+    fi
 
     file "$output"
     stat -c '%n %s bytes' "$output"
 }
 
-TARGETS=("$@")
+TARGETS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --upx)
+            WITH_UPX=1
+            shift
+            ;;
+        -h|--help)
+            print_usage
+            exit 0
+            ;;
+        *)
+            TARGETS+=("$1")
+            shift
+            ;;
+    esac
+done
+
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
     TARGETS=(x86_64 armv5te armv7a armv7hf aarch64)
 fi
@@ -110,32 +149,39 @@ UPX_502="$(
 )"
 
 require_executable "$ZIG_BIN" "Zig"
-require_executable "$UPX_424" "UPX 4.2.4"
-require_executable "$UPX_502" "UPX 5.0.2"
-require_upx_version "$UPX_424" "4.2.4"
-require_upx_version "$UPX_502" "5.0.2"
+if [[ "$WITH_UPX" == "1" ]]; then
+    require_executable "$UPX_424" "UPX 4.2.4"
+    require_executable "$UPX_502" "UPX 5.0.2"
+    require_upx_version "$UPX_424" "4.2.4"
+    require_upx_version "$UPX_502" "5.0.2"
+fi
 
+echo "Version: $VERSION"
 echo "Using Zig: $ZIG_BIN ($("$ZIG_BIN" version))"
-echo "Using UPX 4.2.4: $UPX_424"
-echo "Using UPX 5.0.2: $UPX_502"
+if [[ "$WITH_UPX" == "1" ]]; then
+    echo "Using UPX 4.2.4: $UPX_424"
+    echo "Using UPX 5.0.2: $UPX_502"
+else
+    echo "UPX: disabled"
+fi
 echo
 
 for target in "${TARGETS[@]}"; do
     case "$target" in
         x86_64)
-            build_target "x86_64" "x86_64-linux-musl" "${X86_64_CPU:-baseline}" "$UPX_502"
+            build_target "x86_64" "x86_64-linux-musl" "${X86_64_CPU:-baseline}"
             ;;
         armv5te)
-            build_target "armv5te" "arm-linux-musleabi" "${ARMV5_CPU:-arm926ej_s}" "$UPX_424"
+            build_target "armv5te" "arm-linux-musleabi" "${ARMV5_CPU:-arm926ej_s}"
             ;;
         armv7a)
-            build_target "armv7a" "arm-linux-musleabi" "${ARMV7_CPU:-mpcorenovfp}" "$UPX_502"
+            build_target "armv7a" "arm-linux-musleabi" "${ARMV7_CPU:-mpcorenovfp}"
             ;;
         armv7hf)
-            build_target "armv7hf" "arm-linux-musleabihf" "${ARMV7HF_CPU:-cortex_a9}" "$UPX_502"
+            build_target "armv7hf" "arm-linux-musleabihf" "${ARMV7HF_CPU:-cortex_a9}"
             ;;
         aarch64)
-            build_target "aarch64" "aarch64-linux-musl" "${AARCH64_CPU:-generic}" "$UPX_502"
+            build_target "aarch64" "aarch64-linux-musl" "${AARCH64_CPU:-generic}"
             ;;
         *)
             echo "error: unsupported target '$target'" >&2
@@ -148,8 +194,8 @@ done
 
 (
     cd "$OUT_DIR"
-    sha256sum geotool-linux-* > SHA256SUMS
+    sha256sum "geotool-v${VERSION}-linux-"* > "SHA256SUMS-v${VERSION}"
 )
 
 echo "Artifacts written to: $OUT_DIR"
-echo "Checksums written to: $OUT_DIR/SHA256SUMS"
+echo "Checksums written to: $OUT_DIR/SHA256SUMS-v${VERSION}"
