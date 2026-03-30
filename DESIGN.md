@@ -2,17 +2,17 @@
 
 ## 1. 设计目标
 
-`geotool` 是一个面向 geosite 文件的轻量级解析工具，重点解决两个问题：
+`geotool` 是一个面向 geosite / geoip 数据文件的轻量级解析工具，重点解决两类问题：
 
-1. 快速列出 geosite 文件中的全部分类
-2. 按分类导出原始规则，并保留规则类型与属性信息
+1. 快速列出 geosite / geoip 文件中的全部分类
+2. 按分类导出 geosite 规则或 geoip CIDR 规则
 
 设计时的核心约束如下：
 
 - 二进制体积尽量小，目标为 `100KB` 级别
 - 依赖尽量少，避免引入大型第三方库
 - 方便后续交叉编译到 `armv7`、`aarch64` 等平台
-- 输出结果必须尽量接近 geosite 中的原始明文规则语义
+- 输出结果必须尽量接近 geosite / geoip 中的原始明文规则语义
 
 ## 2. 为什么选择 Zig
 
@@ -33,8 +33,9 @@
 
 - `v2fly/domain-list-community` 生成的 `dlc.dat`
 - `Loyalsoldier/v2ray-rules-dat` 生成的 `geosite.dat`
+- `Loyalsoldier/geoip` 生成的 `geoip.dat`
 
-它们都属于 geosite 类数据文件，本质上是 protobuf 编码的规则集合。
+它们本质上都是 protobuf 编码的规则集合。
 
 从当前实现视角，可抽象为：
 
@@ -55,11 +56,23 @@ GeoSiteList
 - `type` 决定输出前缀
 - `Attribute` 决定附加的 `@attr` 或 `@key=value`
 
+geoip 结构则可抽象为：
+
+```text
+GeoIPList
+  └── GeoIP
+        ├── category / code
+        ├── inverse_match
+        └── CIDR
+              ├── ip
+              └── prefix
+```
+
 ## 4. 功能需求
 
 ### 4.1 分类列表
 
-输入一个 geosite 文件，程序应输出全部分类名，每行一个。
+输入一个 geosite 或 geoip 文件，程序应输出全部分类名，每行一个。
 
 要求：
 
@@ -78,7 +91,19 @@ GeoSiteList
 - 支持逗号分隔的多分类
 - 多分类合并时去除重复规则
 
-### 4.3 规则导出格式
+### 4.3 GeoIP 分类导出
+
+输入 geoip 文件和一个或多个分类名，程序应输出该分类下的全部 CIDR 规则。
+
+要求：
+
+- 输出为明文 `ip/prefix`
+- 分类名匹配不区分大小写
+- 支持逗号分隔的多分类
+- 多分类合并时去除重复规则
+- 支持按 `IPv4` / `IPv6` 过滤
+
+### 4.4 Geosite 规则导出格式
 
 输出格式定义如下：
 
@@ -97,6 +122,19 @@ domain:test.com @ads
 full:api.example.com @region=cn
 ```
 
+### 4.5 GeoIP 规则导出格式
+
+```text
+<ip>/<prefix>
+```
+
+示例：
+
+```text
+1.0.1.0/24
+2001:250::/36
+```
+
 ## 5. 总体架构
 
 当前项目采用三层结构：
@@ -110,7 +148,7 @@ full:api.example.com @region=cn
 - 解析命令行参数
 - 读取输入文件
 - 解析 `-c` 中的多分类列表
-- 调用 geosite 解析层
+- 调用 geosite / geoip 解析层
 - 处理帮助信息和错误输出
 
 ### 5.2 geosite 解析层
@@ -128,7 +166,20 @@ full:api.example.com @region=cn
 
 这是项目的核心逻辑层。
 
-### 5.3 protobuf 最小读取层
+### 5.3 geoip 解析层
+
+文件：[src/geoip.zig](/home/sadog/project/geotool/src/geoip.zig)
+
+职责：
+
+- 遍历 GeoIP protobuf 数据结构
+- 解析分类名
+- 导出 CIDR
+- 多分类合并
+- 按完整 CIDR 规则去重
+- IPv4 / IPv6 过滤
+
+### 5.4 protobuf 最小读取层
 
 文件：[src/pb.zig](/home/sadog/project/geotool/src/pb.zig)
 
@@ -148,12 +199,12 @@ full:api.example.com @region=cn
 原因：
 
 - 目标是极小体积
-- geosite 使用到的 protobuf 特性非常有限
+- geosite / geoip 使用到的 protobuf 特性都非常有限
 - 只需要支持 `varint`、`length_delimited`、`fixed32`、`fixed64` 的跳过逻辑
 
 因此项目采用手写最小读取器，而不是链接完整 protobuf 运行时。
 
-### 6.2 导出时保留规则类型
+### 6.2 geosite 导出时保留规则类型
 
 用户需求不是“导出域名列表”，而是“导出原始规则语义”。
 
@@ -194,6 +245,8 @@ regexp:^gstatic\.
 
 因此当前实现以最终输出的完整规则字符串作为去重键。
 
+对于 geoip，这个“完整规则字符串”就是 `ip/prefix`，如果遇到 `inverse_match`，则会保留其导出语义。
+
 ### 6.4 分类存在性先校验
 
 在真正输出前，先扫描一遍输入文件，确认用户指定的所有分类都存在。
@@ -207,7 +260,7 @@ regexp:^gstatic\.
 
 - 只要指定列表中有任意分类不存在，整体返回 `category not found`
 
-## 7. 规则类型映射
+## 7. Geosite 规则类型映射
 
 当前实现中的规则类型映射如下：
 
