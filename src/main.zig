@@ -1,13 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const geoip = @import("geoip.zig");
 const geosite = @import("geosite.zig");
 
 const max_input_size = 256 * 1024 * 1024;
-const app_version = "1.0";
+const app_version = "1.1";
 
 const Command = enum {
-    list,
-    export_cmd,
+    geosite_list,
+    geosite_export,
+    geoip_list,
+    geoip_export,
     version,
 };
 
@@ -16,6 +19,7 @@ const Options = struct {
     input: []const u8,
     categories: ?[]const u8 = null,
     output: ?[]const u8 = null,
+    ip_family: geoip.IPFamily = .both,
 };
 
 pub fn main() void {
@@ -56,16 +60,16 @@ fn run() !void {
     defer allocator.free(data);
 
     switch (options.command) {
-        .list => {
+        .geosite_list => {
             if (options.output) |path| {
                 var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
                 defer file.close();
-                try runList(allocator, file.deprecatedWriter(), data);
+                try runGeoSiteList(allocator, file.deprecatedWriter(), data);
             } else {
-                try runList(allocator, std.fs.File.stdout().deprecatedWriter(), data);
+                try runGeoSiteList(allocator, std.fs.File.stdout().deprecatedWriter(), data);
             }
         },
-        .export_cmd => {
+        .geosite_export => {
             const categories_raw = options.categories orelse return error.InvalidArguments;
             const categories = try parseCategoryList(allocator, categories_raw);
             defer allocator.free(categories);
@@ -78,12 +82,44 @@ fn run() !void {
                 try geosite.exportCategories(allocator, std.fs.File.stdout().deprecatedWriter(), data, categories);
             }
         },
+        .geoip_list => {
+            if (options.output) |path| {
+                var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+                defer file.close();
+                try runGeoIPList(allocator, file.deprecatedWriter(), data);
+            } else {
+                try runGeoIPList(allocator, std.fs.File.stdout().deprecatedWriter(), data);
+            }
+        },
+        .geoip_export => {
+            const categories_raw = options.categories orelse return error.InvalidArguments;
+            const categories = try parseCategoryList(allocator, categories_raw);
+            defer allocator.free(categories);
+
+            if (options.output) |path| {
+                var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+                defer file.close();
+                try geoip.exportCategories(allocator, file.deprecatedWriter(), data, categories, options.ip_family);
+            } else {
+                try geoip.exportCategories(allocator, std.fs.File.stdout().deprecatedWriter(), data, categories, options.ip_family);
+            }
+        },
         .version => unreachable,
     }
 }
 
-fn runList(allocator: std.mem.Allocator, writer: anytype, data: []const u8) !void {
+fn runGeoSiteList(allocator: std.mem.Allocator, writer: anytype, data: []const u8) !void {
     const categories = try geosite.listCategories(allocator, data);
+    defer allocator.free(categories);
+
+    for (categories) |category| {
+        try writer.writeAll(category);
+        try writer.writeByte('\n');
+    }
+}
+
+fn runGeoIPList(allocator: std.mem.Allocator, writer: anytype, data: []const u8) !void {
+    const categories = try geoip.listCategories(allocator, data);
     defer allocator.free(categories);
 
     for (categories) |category| {
@@ -108,9 +144,13 @@ fn parseArgs(args: []const []const u8) !Options {
     }
 
     const command = if (std.mem.eql(u8, args[1], "list"))
-        Command.list
+        Command.geosite_list
     else if (std.mem.eql(u8, args[1], "export"))
-        Command.export_cmd
+        Command.geosite_export
+    else if (std.mem.eql(u8, args[1], "geoip-list"))
+        Command.geoip_list
+    else if (std.mem.eql(u8, args[1], "geoip-export"))
+        Command.geoip_export
     else
         return error.InvalidArguments;
 
@@ -118,6 +158,9 @@ fn parseArgs(args: []const []const u8) !Options {
         .command = command,
         .input = "",
     };
+
+    var want_ipv4 = false;
+    var want_ipv6 = false;
 
     var i: usize = 2;
     while (i < args.len) : (i += 1) {
@@ -134,6 +177,10 @@ fn parseArgs(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             options.output = args[i];
+        } else if (std.mem.eql(u8, arg, "--ipv4")) {
+            want_ipv4 = true;
+        } else if (std.mem.eql(u8, arg, "--ipv6")) {
+            want_ipv6 = true;
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             return error.HelpRequested;
         } else {
@@ -145,8 +192,18 @@ fn parseArgs(args: []const []const u8) !Options {
         return error.InvalidArguments;
     }
 
-    if (command == .export_cmd and options.categories == null) {
+    if ((command == .geosite_export or command == .geoip_export) and options.categories == null) {
         return error.InvalidArguments;
+    }
+
+    if (want_ipv4 or want_ipv6) {
+        if (command != .geoip_export) return error.InvalidArguments;
+        options.ip_family = if (want_ipv4 and want_ipv6)
+            .both
+        else if (want_ipv4)
+            .ipv4
+        else
+            .ipv6;
     }
 
     return options;
@@ -191,11 +248,15 @@ fn printUsage(writer: anytype) !void {
         \\Usage:
         \\  geotool list -i <geosite.dat> [-o <file>]
         \\  geotool export -i <geosite.dat> -c <category[,category...]> [-o <file>]
+        \\  geotool geoip-list -i <geoip.dat> [-o <file>]
+        \\  geotool geoip-export -i <geoip.dat> -c <category[,category...]> [--ipv4] [--ipv6] [-o <file>]
         \\
         \\Options:
         \\  -i, --input       Path to geosite/dlc dat file
         \\  -c, --category    One or more category names, separated by commas
         \\  -o, --output      Write result to file instead of stdout
+        \\      --ipv4        Only export IPv4 CIDR rules for geoip-export
+        \\      --ipv6        Only export IPv6 CIDR rules for geoip-export
         \\  -v, --version     Show version
         \\  -h, --help        Show this help
         \\

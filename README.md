@@ -14,10 +14,13 @@
 - `list` 列出全部分类
 - `export` 导出单个分类
 - `export` 导出多个分类
+- `geoip-list` 列出 geoip 分类
+- `geoip-export` 导出 geoip CIDR 规则
 - 多分类合并时按完整规则去重
 - 分类名大小写不敏感
 - 输出保留 `domain:` / `full:` / `keyword:` / `regexp:` 前缀
 - 输出保留属性，格式为 `@attr` 或 `@key=value`
+- `geoip-export` 支持 `--ipv4` / `--ipv6` 过滤
 
 ## 为什么选 Zig
 
@@ -32,7 +35,7 @@
 
 ## 构建
 
-当前版本：`1.0`
+当前版本：`1.1`
 
 当前代码已在 Zig `0.15.2` 下验证。
 
@@ -130,6 +133,30 @@ bash ./scripts/build-release.sh armv7a aarch64
 ./zig-out/bin/geotool export -i geosite.dat -c GFW
 ```
 
+列出 geoip 分类：
+
+```bash
+./zig-out/bin/geotool geoip-list -i geoip.dat
+```
+
+导出 geoip 分类：
+
+```bash
+./zig-out/bin/geotool geoip-export -i geoip.dat -c CN
+```
+
+只导出 geoip 中的 IPv4：
+
+```bash
+./zig-out/bin/geotool geoip-export -i geoip.dat -c CN --ipv4
+```
+
+只导出 geoip 中的 IPv6：
+
+```bash
+./zig-out/bin/geotool geoip-export -i geoip.dat -c CN --ipv6
+```
+
 导出多个分类：
 
 ```bash
@@ -172,6 +199,25 @@ full:test.example.com @region=cn
 - `@attr` 表示布尔属性
 - `@key=value` 表示带值属性
 
+## GeoIP 导出格式
+
+`geoip-export` 输出的是 CIDR 明文规则，每行一条。
+
+示例：
+
+```text
+1.0.1.0/24
+1.0.2.0/23
+2001:250::/36
+```
+
+说明：
+
+- 默认同时输出 IPv4 和 IPv6
+- `--ipv4` 只输出 IPv4
+- `--ipv6` 只输出 IPv6
+- 多分类导出时，同样按完整规则文本去重
+
 ## 多分类导出规则
 
 当 `-c` 指定多个分类时：
@@ -199,6 +245,8 @@ full:test.example.com @region=cn
 Usage:
   geotool list -i <geosite.dat> [-o <file>]
   geotool export -i <geosite.dat> -c <category[,category...]> [-o <file>]
+  geotool geoip-list -i <geoip.dat> [-o <file>]
+  geotool geoip-export -i <geoip.dat> -c <category[,category...]> [--ipv4] [--ipv6] [-o <file>]
 ```
 
 参数说明：
@@ -206,6 +254,8 @@ Usage:
 - `-i, --input`：输入 geosite 文件路径
 - `-c, --category`：一个或多个分类名，使用逗号分隔
 - `-o, --output`：输出到文件，而不是标准输出
+- `--ipv4`：仅用于 `geoip-export`，只导出 IPv4
+- `--ipv6`：仅用于 `geoip-export`，只导出 IPv6
 - `-v, --version`：显示版本号
 - `-h, --help`：显示帮助
 
@@ -217,6 +267,7 @@ Usage:
 ├── README.md
 ├── DESIGN.md
 └── src
+    ├── geoip.zig
     ├── geosite.zig
     ├── main.zig
     └── pb.zig
@@ -225,6 +276,7 @@ Usage:
 各文件职责：
 
 - `src/main.zig`：命令行参数解析与入口
+- `src/geoip.zig`：geoip 数据解析与 CIDR 导出
 - `src/geosite.zig`：geosite 数据解析、分类导出、规则去重
 - `src/pb.zig`：最小 protobuf 读取器
 - `build.zig`：构建脚本
@@ -239,6 +291,8 @@ Usage:
 - 重复分类名去重
 - 重复规则去重
 - 分类不存在时返回错误
+- geoip CIDR 导出
+- geoip IPv4/IPv6 过滤
 
 运行测试：
 
@@ -248,7 +302,7 @@ zig test src/geosite.zig -O ReleaseSmall
 
 ## 限制与说明
 
-- 当前只实现 geosite 文件读取，不负责生成 geosite 文件
+- 当前只实现 geosite / geoip 文件读取，不负责生成数据文件
 - 当前错误提示较简洁，分类不存在时统一返回 `category not found`
 - 多分类导出时，只要其中任意一个分类不存在，命令会失败
 - 当前默认面向本地文件使用，不包含网络下载逻辑
