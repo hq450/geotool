@@ -9,6 +9,11 @@ pub const Error = error{
     OutOfMemory,
 } || pb.Error;
 
+pub const CategoryStat = struct {
+    category: []const u8,
+    count: usize,
+};
+
 pub const IPFamily = enum {
     both,
     ipv4,
@@ -32,6 +37,28 @@ pub fn listCategories(allocator: std.mem.Allocator, data: []const u8) Error![][]
 
     std.mem.sort([]const u8, categories.items, {}, lessThanIgnoreCase);
     return categories.toOwnedSlice(allocator);
+}
+
+pub fn listCategoryStats(allocator: std.mem.Allocator, data: []const u8, family: IPFamily) Error![]CategoryStat {
+    var stats: std.ArrayListUnmanaged(CategoryStat) = .{};
+    defer stats.deinit(allocator);
+
+    var reader = pb.Reader.init(data);
+    while (!reader.eof()) {
+        const field = try reader.readField();
+        if (field.number == 1 and field.wire_type == .length_delimited) {
+            const entry = try reader.readBytes();
+            try stats.append(allocator, .{
+                .category = try parseCategory(entry),
+                .count = try countCIDRs(entry, family),
+            });
+            continue;
+        }
+        try reader.skip(field.wire_type);
+    }
+
+    std.mem.sort(CategoryStat, stats.items, {}, lessThanStatIgnoreCase);
+    return stats.toOwnedSlice(allocator);
 }
 
 pub fn exportCategories(
@@ -100,6 +127,64 @@ fn parseCategory(entry: []const u8) Error![]const u8 {
     if (country_code.len != 0) return country_code;
     if (code.len != 0) return code;
     return error.MissingCategory;
+}
+
+fn countCIDRs(entry: []const u8, family: IPFamily) Error!usize {
+    var count: usize = 0;
+    var reader = pb.Reader.init(entry);
+    while (!reader.eof()) {
+        const field = try reader.readField();
+        switch (field.number) {
+            1, 5 => {
+                if (field.wire_type != .length_delimited) return error.InvalidWireType;
+                _ = try reader.readBytes();
+            },
+            2 => {
+                if (field.wire_type != .length_delimited) return error.InvalidWireType;
+                const cidr = try reader.readBytes();
+                if (try cidrMatchesFamily(cidr, family)) count += 1;
+            },
+            3 => {
+                if (field.wire_type != .varint) return error.InvalidWireType;
+                _ = try reader.readVarint();
+            },
+            4 => {
+                if (field.wire_type != .length_delimited) return error.InvalidWireType;
+                _ = try reader.readBytes();
+            },
+            else => try reader.skip(field.wire_type),
+        }
+    }
+    return count;
+}
+
+fn cidrMatchesFamily(message: []const u8, family: IPFamily) Error!bool {
+    var ip: []const u8 = "";
+    var reader = pb.Reader.init(message);
+    while (!reader.eof()) {
+        const field = try reader.readField();
+        switch (field.number) {
+            1 => {
+                if (field.wire_type != .length_delimited) return error.InvalidWireType;
+                ip = try reader.readBytes();
+            },
+            2 => {
+                if (field.wire_type != .varint) return error.InvalidWireType;
+                _ = try reader.readVarint();
+            },
+            else => try reader.skip(field.wire_type),
+        }
+    }
+
+    if (ip.len == 0) return error.MissingCIDRAddress;
+    const is_ipv4 = ip.len == 4;
+    const is_ipv6 = ip.len == 16;
+    if (!is_ipv4 and !is_ipv6) return error.InvalidIPAddressLength;
+    return switch (family) {
+        .both => true,
+        .ipv4 => is_ipv4,
+        .ipv6 => is_ipv6,
+    };
 }
 
 fn ensureCategoriesExist(
@@ -339,6 +424,10 @@ fn lessThanIgnoreCase(_: void, a: []const u8, b: []const u8) bool {
     return a.len < b.len;
 }
 
+fn lessThanStatIgnoreCase(_: void, a: CategoryStat, b: CategoryStat) bool {
+    return lessThanIgnoreCase({}, a.category, b.category);
+}
+
 fn containsCategoryIgnoreCase(categories: []const []const u8, wanted: []const u8) bool {
     for (categories) |category| {
         if (std.ascii.eqlIgnoreCase(category, wanted)) {
@@ -410,6 +499,21 @@ test "exportCategories returns CategoryNotFound" {
         error.CategoryNotFound,
         exportCategories(allocator, output.writer(), data, &wanted_categories, .both),
     );
+}
+
+test "listCategoryStats returns cidr counts" {
+    const allocator = std.testing.allocator;
+    const data = try buildSampleGeoIPList(allocator);
+    defer allocator.free(data);
+
+    const stats = try listCategoryStats(allocator, data, .both);
+    defer allocator.free(stats);
+
+    try std.testing.expectEqual(@as(usize, 2), stats.len);
+    try std.testing.expectEqualStrings("INVERSE", stats[0].category);
+    try std.testing.expectEqual(@as(usize, 1), stats[0].count);
+    try std.testing.expectEqualStrings("TEST", stats[1].category);
+    try std.testing.expectEqual(@as(usize, 2), stats[1].count);
 }
 
 fn buildSampleGeoIPList(allocator: std.mem.Allocator) ![]u8 {

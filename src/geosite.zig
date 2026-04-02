@@ -8,6 +8,20 @@ pub const Error = error{
     OutOfMemory,
 } || pb.Error;
 
+pub const CategoryStat = struct {
+    category: []const u8,
+    count: usize,
+};
+
+pub const ExportFormat = enum {
+    raw,
+    domain,
+    full,
+    suffix,
+    keyword,
+    regexp,
+};
+
 const AttributeValue = union(enum) {
     none: void,
     bool: bool,
@@ -38,14 +52,37 @@ pub fn listCategories(allocator: std.mem.Allocator, data: []const u8) Error![][]
     return categories.toOwnedSlice(allocator);
 }
 
+pub fn listCategoryStats(allocator: std.mem.Allocator, data: []const u8) Error![]CategoryStat {
+    var stats: std.ArrayListUnmanaged(CategoryStat) = .{};
+    defer stats.deinit(allocator);
+
+    var reader = pb.Reader.init(data);
+    while (!reader.eof()) {
+        const field = try reader.readField();
+        if (field.number == 1 and field.wire_type == .length_delimited) {
+            const entry = try reader.readBytes();
+            try stats.append(allocator, .{
+                .category = try parseCategory(entry),
+                .count = try countRules(entry),
+            });
+            continue;
+        }
+        try reader.skip(field.wire_type);
+    }
+
+    std.mem.sort(CategoryStat, stats.items, {}, lessThanStatIgnoreCase);
+    return stats.toOwnedSlice(allocator);
+}
+
 pub fn exportCategory(
     allocator: std.mem.Allocator,
     writer: anytype,
     data: []const u8,
     wanted: []const u8,
+    format: ExportFormat,
 ) !void {
     const wanted_categories = [_][]const u8{wanted};
-    try exportCategories(allocator, writer, data, &wanted_categories);
+    try exportCategories(allocator, writer, data, &wanted_categories, format);
 }
 
 pub fn exportCategories(
@@ -53,6 +90,7 @@ pub fn exportCategories(
     writer: anytype,
     data: []const u8,
     wanted_categories: []const []const u8,
+    format: ExportFormat,
 ) !void {
     const unique_categories = try dedupeCategories(allocator, wanted_categories);
     defer allocator.free(unique_categories);
@@ -77,6 +115,7 @@ pub fn exportCategories(
             writer,
             data,
             wanted,
+            format,
             allocator,
             &attributes,
             &line,
@@ -126,6 +165,27 @@ fn parseCategory(entry: []const u8) Error![]const u8 {
     return error.MissingCategory;
 }
 
+fn countRules(entry: []const u8) Error!usize {
+    var count: usize = 0;
+    var reader = pb.Reader.init(entry);
+    while (!reader.eof()) {
+        const field = try reader.readField();
+        switch (field.number) {
+            1, 4 => {
+                if (field.wire_type != .length_delimited) return error.InvalidWireType;
+                _ = try reader.readBytes();
+            },
+            2 => {
+                if (field.wire_type != .length_delimited) return error.InvalidWireType;
+                _ = try reader.readBytes();
+                count += 1;
+            },
+            else => try reader.skip(field.wire_type),
+        }
+    }
+    return count;
+}
+
 fn ensureCategoriesExist(
     allocator: std.mem.Allocator,
     data: []const u8,
@@ -165,6 +225,7 @@ fn exportSingleCategory(
     writer: anytype,
     data: []const u8,
     wanted: []const u8,
+    format: ExportFormat,
     allocator: std.mem.Allocator,
     attributes: *std.ArrayListUnmanaged(Attribute),
     line: *std.array_list.Managed(u8),
@@ -177,7 +238,7 @@ fn exportSingleCategory(
             const entry = try reader.readBytes();
             const category = try parseCategory(entry);
             if (std.ascii.eqlIgnoreCase(category, wanted)) {
-                try writeGeoSite(writer, entry, allocator, attributes, line, seen_rules);
+                try writeGeoSite(writer, entry, format, allocator, attributes, line, seen_rules);
                 return;
             }
             continue;
@@ -191,6 +252,7 @@ fn exportSingleCategory(
 fn writeGeoSite(
     writer: anytype,
     entry: []const u8,
+    format: ExportFormat,
     allocator: std.mem.Allocator,
     attributes: *std.ArrayListUnmanaged(Attribute),
     line: *std.array_list.Managed(u8),
@@ -209,6 +271,7 @@ fn writeGeoSite(
                 try writeDomainRule(
                     writer,
                     try reader.readBytes(),
+                    format,
                     allocator,
                     attributes,
                     line,
@@ -223,6 +286,7 @@ fn writeGeoSite(
 fn writeDomainRule(
     writer: anytype,
     message: []const u8,
+    format: ExportFormat,
     allocator: std.mem.Allocator,
     attributes: *std.ArrayListUnmanaged(Attribute),
     line: *std.array_list.Managed(u8),
@@ -256,12 +320,35 @@ fn writeDomainRule(
 
     line.clearRetainingCapacity();
     const line_writer = line.writer();
-
-    try line_writer.writeAll(ruleTypePrefix(rule_type));
-    try line_writer.writeByte(':');
-    try line_writer.writeAll(value);
-    for (attributes.items) |attribute| {
-        try writeAttribute(line_writer, attribute);
+    switch (format) {
+        .raw => {
+            try line_writer.writeAll(ruleTypePrefix(rule_type));
+            try line_writer.writeByte(':');
+            try line_writer.writeAll(value);
+            for (attributes.items) |attribute| {
+                try writeAttribute(line_writer, attribute);
+            }
+        },
+        .domain => switch (rule_type) {
+            2, 3 => try line_writer.writeAll(value),
+            else => return,
+        },
+        .full => switch (rule_type) {
+            3 => try line_writer.writeAll(value),
+            else => return,
+        },
+        .suffix => switch (rule_type) {
+            2 => try line_writer.writeAll(value),
+            else => return,
+        },
+        .keyword => switch (rule_type) {
+            0 => try line_writer.writeAll(value),
+            else => return,
+        },
+        .regexp => switch (rule_type) {
+            1 => try line_writer.writeAll(value),
+            else => return,
+        },
     }
 
     if (seen_rules.contains(line.items)) {
@@ -342,6 +429,10 @@ fn lessThanIgnoreCase(_: void, a: []const u8, b: []const u8) bool {
     return a.len < b.len;
 }
 
+fn lessThanStatIgnoreCase(_: void, a: CategoryStat, b: CategoryStat) bool {
+    return lessThanIgnoreCase({}, a.category, b.category);
+}
+
 fn containsCategoryIgnoreCase(categories: []const []const u8, wanted: []const u8) bool {
     for (categories) |category| {
         if (std.ascii.eqlIgnoreCase(category, wanted)) {
@@ -369,7 +460,7 @@ test "listCategories and exportCategory preserve rule types and attributes" {
     var output = std.array_list.Managed(u8).init(allocator);
     defer output.deinit();
 
-    try exportCategory(allocator, output.writer(), data, "test");
+    try exportCategory(allocator, output.writer(), data, "test", .raw);
     try std.testing.expectEqualStrings(
         \\domain:example.com
         \\full:full.example.com @ads
@@ -389,7 +480,7 @@ test "exportCategory returns CategoryNotFound" {
 
     try std.testing.expectError(
         error.CategoryNotFound,
-        exportCategory(allocator, output.writer(), data, "missing"),
+        exportCategory(allocator, output.writer(), data, "missing", .raw),
     );
 }
 
@@ -407,13 +498,44 @@ test "exportCategories merges categories and removes duplicate rules" {
     var output = std.array_list.Managed(u8).init(allocator);
     defer output.deinit();
 
-    try exportCategories(allocator, output.writer(), data, &wanted_categories);
+    try exportCategories(allocator, output.writer(), data, &wanted_categories, .raw);
     try std.testing.expectEqualStrings(
         \\domain:shared.example
         \\keyword:beta
         \\domain:alpha.example
         \\
     , output.items);
+}
+
+test "exportCategory domain format keeps only full and suffix values" {
+    const allocator = std.testing.allocator;
+    const data = try buildSampleGeoSiteList(allocator);
+    defer allocator.free(data);
+
+    var output = std.array_list.Managed(u8).init(allocator);
+    defer output.deinit();
+
+    try exportCategory(allocator, output.writer(), data, "test", .domain);
+    try std.testing.expectEqualStrings(
+        \\example.com
+        \\full.example.com
+        \\
+    , output.items);
+}
+
+test "listCategoryStats returns category counts" {
+    const allocator = std.testing.allocator;
+    const data = try buildMergedGeoSiteList(allocator);
+    defer allocator.free(data);
+
+    const stats = try listCategoryStats(allocator, data);
+    defer allocator.free(stats);
+
+    try std.testing.expectEqual(@as(usize, 2), stats.len);
+    try std.testing.expectEqualStrings("FIRST", stats[0].category);
+    try std.testing.expectEqual(@as(usize, 2), stats[0].count);
+    try std.testing.expectEqualStrings("SECOND", stats[1].category);
+    try std.testing.expectEqual(@as(usize, 2), stats[1].count);
 }
 
 fn buildSampleGeoSiteList(allocator: std.mem.Allocator) ![]u8 {
