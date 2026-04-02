@@ -6,18 +6,18 @@ VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/dist}"
 LOCAL_CACHE_BASE="${LOCAL_CACHE_BASE:-$ROOT_DIR/.zig-cache/release}"
 GLOBAL_CACHE_DIR="${GLOBAL_CACHE_DIR:-$ROOT_DIR/.zig-cache/release-global}"
-WITH_UPX=0
+WITH_UPX=1
 
 print_usage() {
     cat <<'EOF'
 Usage:
-  bash ./scripts/build-release.sh [--upx] [target...]
+  bash ./scripts/build-release.sh [--no-upx] [target...]
 
 Targets:
   x86_64 armv5te armv7a armv7hf aarch64
 
 Options:
-  --upx         Compress artifacts with the configured UPX binaries
+  --no-upx      Build without UPX compression
   -h, --help    Show this help
 EOF
 }
@@ -123,6 +123,10 @@ build_target() {
 TARGETS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --no-upx)
+            WITH_UPX=0
+            shift
+            ;;
         --upx)
             WITH_UPX=1
             shift
@@ -160,7 +164,7 @@ if [[ "$WITH_UPX" == "1" ]]; then
     echo "Using UPX 4.2.4: $UPX_4_2_4"
     echo "Using UPX 5.0.2: $UPX_5_0_2"
 else
-    echo "UPX: disabled"
+    echo "UPX: disabled (--no-upx)"
 fi
 echo
 
