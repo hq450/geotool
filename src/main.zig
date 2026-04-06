@@ -5,7 +5,7 @@ const geosite = @import("geosite.zig");
 
 const max_input_size = 256 * 1024 * 1024;
 const max_plan_size = 4 * 1024 * 1024;
-const app_version = "1.2";
+const app_version = "1.3";
 
 const Command = enum {
     geosite_list,
@@ -65,6 +65,27 @@ pub fn main() void {
     };
 }
 
+fn readStreamCompatAlloc(allocator: std.mem.Allocator, file: std.fs.File, max_bytes: usize) ![]u8 {
+    var list = std.ArrayList(u8){};
+    defer list.deinit(allocator);
+
+    var buf: [4096]u8 = undefined;
+    while (true) {
+        const n = try file.read(&buf);
+        if (n == 0) break;
+        if (list.items.len + n > max_bytes) return error.FileTooBig;
+        try list.appendSlice(allocator, buf[0..n]);
+    }
+
+    return try list.toOwnedSlice(allocator);
+}
+
+fn readFileCompatAlloc(allocator: std.mem.Allocator, path: []const u8, max_bytes: usize) ![]u8 {
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+    return try readStreamCompatAlloc(allocator, file, max_bytes);
+}
+
 fn run() !void {
     const allocator = if (builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
     const args = try std.process.argsAlloc(allocator);
@@ -80,7 +101,7 @@ fn run() !void {
     switch (options.command) {
         .batch_export => try runBatchExport(allocator, options),
         .geosite_list => {
-            const data = try std.fs.cwd().readFileAlloc(allocator, options.input, max_input_size);
+            const data = try readFileCompatAlloc(allocator, options.input, max_input_size);
             defer allocator.free(data);
             if (options.output) |path| {
                 var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
@@ -91,7 +112,7 @@ fn run() !void {
             }
         },
         .geosite_stat => {
-            const data = try std.fs.cwd().readFileAlloc(allocator, options.input, max_input_size);
+            const data = try readFileCompatAlloc(allocator, options.input, max_input_size);
             defer allocator.free(data);
             if (options.output) |path| {
                 var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
@@ -102,7 +123,7 @@ fn run() !void {
             }
         },
         .geosite_export => {
-            const data = try std.fs.cwd().readFileAlloc(allocator, options.input, max_input_size);
+            const data = try readFileCompatAlloc(allocator, options.input, max_input_size);
             defer allocator.free(data);
             const categories_raw = options.categories orelse return error.InvalidArguments;
             const categories = try parseCategoryList(allocator, categories_raw);
@@ -117,7 +138,7 @@ fn run() !void {
             }
         },
         .geoip_list => {
-            const data = try std.fs.cwd().readFileAlloc(allocator, options.input, max_input_size);
+            const data = try readFileCompatAlloc(allocator, options.input, max_input_size);
             defer allocator.free(data);
             if (options.output) |path| {
                 var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
@@ -128,7 +149,7 @@ fn run() !void {
             }
         },
         .geoip_stat => {
-            const data = try std.fs.cwd().readFileAlloc(allocator, options.input, max_input_size);
+            const data = try readFileCompatAlloc(allocator, options.input, max_input_size);
             defer allocator.free(data);
             if (options.output) |path| {
                 var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
@@ -139,7 +160,7 @@ fn run() !void {
             }
         },
         .geoip_export => {
-            const data = try std.fs.cwd().readFileAlloc(allocator, options.input, max_input_size);
+            const data = try readFileCompatAlloc(allocator, options.input, max_input_size);
             defer allocator.free(data);
             const categories_raw = options.categories orelse return error.InvalidArguments;
             const categories = try parseCategoryList(allocator, categories_raw);
@@ -159,7 +180,7 @@ fn run() !void {
 
 fn runBatchExport(allocator: std.mem.Allocator, options: Options) !void {
     const plan_path = options.plan orelse return error.InvalidArguments;
-    const plan_data = try std.fs.cwd().readFileAlloc(allocator, plan_path, max_plan_size);
+    const plan_data = try readFileCompatAlloc(allocator, plan_path, max_plan_size);
     defer allocator.free(plan_data);
 
     const tasks = try parseBatchPlan(allocator, plan_data);
@@ -178,14 +199,14 @@ fn runBatchExport(allocator: std.mem.Allocator, options: Options) !void {
     defer if (geosite_data) |data| allocator.free(data);
     if (need_geosite) {
         const path = options.geosite_input orelse return error.InvalidArguments;
-        geosite_data = try std.fs.cwd().readFileAlloc(allocator, path, max_input_size);
+        geosite_data = try readFileCompatAlloc(allocator, path, max_input_size);
     }
 
     var geoip_data: ?[]u8 = null;
     defer if (geoip_data) |data| allocator.free(data);
     if (need_geoip) {
         const path = options.geoip_input orelse return error.InvalidArguments;
-        geoip_data = try std.fs.cwd().readFileAlloc(allocator, path, max_input_size);
+        geoip_data = try readFileCompatAlloc(allocator, path, max_input_size);
     }
 
     for (tasks) |task| {
