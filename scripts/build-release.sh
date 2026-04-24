@@ -4,9 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/dist}"
+FANCYSS_BINARIES_ROOT="${FANCYSS_BINARIES_ROOT:-}"
 LOCAL_CACHE_BASE="${LOCAL_CACHE_BASE:-$ROOT_DIR/.zig-cache/release}"
 GLOBAL_CACHE_DIR="${GLOBAL_CACHE_DIR:-$ROOT_DIR/.zig-cache/release-global}"
 WITH_UPX=1
+BUILT_FILES=()
 
 print_usage() {
     cat <<'EOF'
@@ -84,6 +86,81 @@ require_upx_version() {
     fi
 }
 
+resolve_fancyss_binaries_dir() {
+    local subdir="$1"
+    local fancyss_root=""
+
+    if [[ -n "${FANCYSS_BINARIES_ROOT:-}" ]]; then
+        printf '%s/%s\n' "${FANCYSS_BINARIES_ROOT%/}" "$subdir"
+        return 0
+    fi
+
+    fancyss_root="$(cd "$ROOT_DIR/../.." && pwd)"
+    if [[ -d "$fancyss_root/binaries" ]]; then
+        printf '%s/binaries/%s\n' "$fancyss_root" "$subdir"
+        return 0
+    fi
+
+    return 1
+}
+
+sync_built_files_to_binaries() {
+    local subdir="$1"
+    shift
+    local binaries_dir=""
+    local artifact=""
+    local prefix=""
+    local checksum="SHA256SUMS-v${VERSION}"
+    local checksum_tmp=""
+    local existing_artifacts=()
+    local known_artifacts=()
+    local filename=""
+    local seen=0
+
+    binaries_dir="$(resolve_fancyss_binaries_dir "$subdir")" || return 0
+    mkdir -p "$binaries_dir"
+
+    for artifact in "${BUILT_FILES[@]}"; do
+        cp -f "$OUT_DIR/$artifact" "$binaries_dir/"
+        chmod 0755 "$binaries_dir/$artifact"
+    done
+
+    if [[ -f "$binaries_dir/$checksum" ]]; then
+        while read -r _ filename; do
+            [[ -n "${filename:-}" && -f "$binaries_dir/$filename" ]] && existing_artifacts+=("$filename")
+        done < "$binaries_dir/$checksum"
+    fi
+
+    for prefix in "$@"; do
+        while IFS= read -r artifact; do
+            known_artifacts+=("$artifact")
+        done < <(find "$binaries_dir" -maxdepth 1 -type f -name "${prefix}-v${VERSION}-linux-*" -printf '%f\n' | sort)
+    done
+
+    checksum_tmp="$(mktemp "$binaries_dir/.${checksum}.tmp.XXXXXX")"
+    (
+        cd "$binaries_dir"
+        for artifact in "${existing_artifacts[@]}"; do
+            sha256sum "$artifact"
+        done
+        for artifact in "${known_artifacts[@]}"; do
+            seen=0
+            for filename in "${existing_artifacts[@]}"; do
+                if [[ "$artifact" == "$filename" ]]; then
+                    seen=1
+                    break
+                fi
+            done
+            if [[ "$seen" == "0" ]]; then
+                sha256sum "$artifact"
+            fi
+        done
+    ) > "$checksum_tmp"
+    mv -f "$checksum_tmp" "$binaries_dir/$checksum"
+
+    echo "Synced final artifacts to: $binaries_dir"
+}
+
 build_target() {
     local name="$1"
     local zig_target="$2"
@@ -118,6 +195,7 @@ build_target() {
 
     file "$output"
     stat -c '%n %s bytes' "$output"
+    BUILT_FILES+=("$(basename "$output")")
 }
 
 TARGETS=()
@@ -201,3 +279,5 @@ done
 
 echo "Artifacts written to: $OUT_DIR"
 echo "Checksums written to: $OUT_DIR/SHA256SUMS-v${VERSION}"
+
+sync_built_files_to_binaries "geotool" "geotool"
